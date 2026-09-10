@@ -135,6 +135,7 @@ impl TryFrom<Box<PulsarSource>> for SourceType {
     type Error = Error;
     fn try_from(value: Box<PulsarSource>) -> Result<Self> {
         let auth: Option<PulsarAuth> = super::parse_pulsar_auth_config(value.auth)?;
+        let tls = super::parse_pulsar_tls_config(value.tls)?;
         let pulsar_config = PulsarSourceConfig {
             dead_letter_policy: value.dead_letter_policy.map(|p| {
                 numaflow_pulsar::source::PulsarDeadLetterPolicy {
@@ -149,6 +150,7 @@ impl TryFrom<Box<PulsarSource>> for SourceType {
             subscription: value.subscription_name,
             max_unack: value.max_unack.unwrap_or(1000) as usize,
             auth,
+            tls,
         };
         Ok(SourceType::Pulsar(pulsar_config))
     }

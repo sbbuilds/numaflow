@@ -248,11 +248,13 @@ impl TryFrom<Box<PulsarSink>> for SinkType {
     type Error = Error;
     fn try_from(sink_config: Box<PulsarSink>) -> std::result::Result<Self, Self::Error> {
         let auth: Option<PulsarAuth> = super::parse_pulsar_auth_config(sink_config.auth)?;
+        let tls = super::parse_pulsar_tls_config(sink_config.tls)?;
         let pulsar_sink_config = numaflow_pulsar::sink::Config {
             addr: sink_config.server_addr,
             topic: sink_config.topic,
             producer_name: sink_config.producer_name,
             auth,
+            tls,
         };
         Ok(SinkType::Pulsar(Box::new(pulsar_sink_config)))
     }
