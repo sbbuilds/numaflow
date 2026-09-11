@@ -1,0 +1,116 @@
+name: harbor-build
+
+# Manual, one-off build+push to Cirrus Harbor for testing a branch on
+# cirrus-sandbox. Runs on GitHub-hosted runners (no corporate TLS-inspecting
+# proxy in the path), unlike building locally on a laptop behind Zscaler.
+#
+# Requires two repo secrets (Settings > Secrets and variables > Actions):
+#   HARBOR_USERNAME    - your harbor.bahcirrus.io username
+#   HARBOR_CLI_SECRET  - a CLI secret generated from your Harbor user profile
+#
+# linux/amd64 only (matches cirrus-sandbox EKS nodes); add an arm64 job later
+# if needed, mirroring nightly-build.yml's build-rust-arm64 job.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag to push to harbor.bahcirrus.io/cirrus/numaflow"
+        default: feat-pulsar-tls-ca-support
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-go-binaries:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Build Go binary (linux/amd64)
+        run: make dist/numaflow-linux-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist
+
+  build-rust-amd64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Rust binaries
+        run: make build-rust-docker-ghactions
+      - name: Rename binaries
+        run: |
+          cp -pv rust/target/x86_64-unknown-linux-gnu/release/numaflow ./numaflow-rs-linux-amd64
+          cp -pv rust/target/x86_64-unknown-linux-gnu/release/entrypoint ./entrypoint-linux-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: numaflow-rs-linux-amd64
+          path: numaflow-rs-linux-amd64
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: entrypoint-linux-amd64
+          path: entrypoint-linux-amd64
+          if-no-files-found: error
+
+  build-push:
+    name: Build & push linux/amd64 to Harbor
+    needs: [build-go-binaries, build-rust-amd64]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/cache@v4
+        with:
+          path: ui/node_modules
+          key: ${{ runner.os }}-node-dep-v1-${{ hashFiles('**/yarn.lock') }}
+      - name: Build UI
+        run: ./hack/build-ui.sh
+
+      - uses: docker/setup-buildx-action@v2
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: numaflow-rs-linux-amd64
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: entrypoint-linux-amd64
+          path: dist/
+      - run: chmod -R +x dist
+
+      - name: Harbor login
+        uses: docker/login-action@v2
+        with:
+          registry: harbor.bahcirrus.io
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_CLI_SECRET }}
+
+      - name: Build and push
+        env:
+          IMAGE: harbor.bahcirrus.io/cirrus/numaflow:${{ github.event.inputs.version }}
+        run: |
+          DOCKER_BUILDKIT=1 docker buildx build \
+            --build-arg BASE_IMAGE=debian:trixie-slim \
+            --platform linux/amd64 \
+            --target numaflow-ci \
+            -t "$IMAGE" \
+            --push \
+            -f Dockerfile \
+            .
+          echo "Pushed $IMAGE"
