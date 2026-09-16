@@ -480,11 +480,24 @@ func (mv MonoVertex) GetPodSpec(req GetMonoVertexPodSpecReq) (*corev1.PodSpec, e
 		containers = append(containers, sidecarContainers...)
 	}
 
+	// BUG FIX: mv.Spec.Sidecars is already folded into sidecarContainers by
+	// buildContainers() above (see its final `sidecarContainers =
+	// append(sidecarContainers, mvspec.Sidecars...)` line), which is then
+	// placed into EITHER initContainers or containers just above depending
+	// on isSidecarSupported(). The previous unconditional
+	// `append(containers, mv.Spec.Sidecars...)` here double-counted every
+	// user-provided sidecar - on any k8s >= 1.29 (the default when
+	// EnvK8sServerVersion isn't set) this guarantees a
+	// "spec.initContainers[N].name: Duplicate value" pod-creation failure
+	// for anyone using spec.sidecars at all. Confirmed via
+	// numaflow/monovertex's pulsar-proxy sidecar failing every pod create
+	// with exactly that error. Introduced by upstream c5afc906 (#2230); not
+	// yet fixed at this fork's HEAD (0069107a) - worth upstreaming.
 	spec := &corev1.PodSpec{
 		Subdomain:      mv.GetHeadlessServiceName(),
 		Volumes:        append(volumes, mv.Spec.Volumes...),
 		InitContainers: initContainers,
-		Containers:     append(containers, mv.Spec.Sidecars...),
+		Containers:     containers,
 	}
 	mv.Spec.ApplyToPodSpec(spec)
 	if mv.Spec.ContainerTemplate != nil {
